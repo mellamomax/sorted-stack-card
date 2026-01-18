@@ -18,6 +18,25 @@
 const CARD_TAG = "sorted-stack-card";
 
 class SortedStackCard extends HTMLElement {
+	
+  static getConfigElement() {
+    return document.createElement("sorted-stack-card-editor");
+  }
+
+  static getStubConfig() {
+    return {
+      type: "custom:sorted-stack-card",
+      direction: "vertical",
+      wrap: false,
+      gap: 8,
+      sort: { by: "name", order: "asc", numeric: false, locale: "sv-SE", case_insensitive: true },
+      cards: [
+        { type: "button", entity: "light.kok" },
+        { type: "button", entity: "light.vardagsrum" },
+      ],
+    };
+  }
+	
   setConfig(config) {
     if (!config || (config.cards == null && config.groups == null)) {
       throw new Error("sorted-stack-card: You must provide 'cards' or 'groups'.");
@@ -334,7 +353,7 @@ customElements.define(CARD_TAG, SortedStackCard);
 // Optional: show in card picker
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "sorted-stack-card",
+  type: "custom:sorted-stack-card",
   name: "Sorted Stack Card",
   description: "Stack (vertical/horizontal) that can sort cards by entity/name/state/last_changed/etc.",
 });
@@ -345,6 +364,7 @@ class SortedStackCardEditor extends HTMLElement {
   setConfig(config) {
     this._config = JSON.parse(JSON.stringify(config || {}));
     if (!this._config.cards && !this._config.groups) this._config.cards = [];
+	this._config.cards = this._config.cards ?? [];
     this._selected = Math.min(this._selected || 0, (this._config.cards?.length || 1) - 1);
     this._render();
   }
@@ -430,13 +450,16 @@ class SortedStackCardEditor extends HTMLElement {
     const el = document.createElement("hui-card-element-editor");
     el.hass = this._hass;
     el.value = cfg;
+	el.config = cfg;
+	el.setConfig?.(cfg);
 
     el.addEventListener("config-changed", (e) => {
-      const newCfg = e.detail?.config;
-      if (!newCfg) return;
-      this._config.cards[this._selected] = newCfg;
-      this._fire();
-    });
+	  const newCfg = e.detail?.value ?? e.detail?.config;
+	  if (!newCfg) return;
+	  this._config.cards[this._selected] = newCfg;
+	  this._render();  // uppdatera tabs/preview direkt
+	  this._fire();
+	});
 
     this._subEditor = el;
     host.appendChild(el);
@@ -560,20 +583,3 @@ class SortedStackCardEditor extends HTMLElement {
 }
 
 customElements.define("sorted-stack-card-editor", SortedStackCardEditor);
-
-const _ssc = customElements.get("sorted-stack-card");
-if (_ssc) {
-  _ssc.getStubConfig = () => ({
-    type: "custom:sorted-stack-card",
-    direction: "vertical",
-    wrap: false,
-    gap: 8,
-    sort: { by: "name", order: "asc", numeric: false, locale: "sv-SE", case_insensitive: true },
-    cards: [
-      { type: "button", entity: "light.kok" },
-      { type: "button", entity: "light.vardagsrum" },
-    ],
-  });
-
-  _ssc.getConfigElement = () => document.createElement("sorted-stack-card-editor");
-}
