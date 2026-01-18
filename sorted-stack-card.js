@@ -341,21 +341,6 @@ window.customCards.push({
 
 
 
-// ---- Lovelace UI editor support ----
-SortedStackCard.getStubConfig = () => ({
-  type: "custom:sorted-stack-card",
-  direction: "vertical",
-  wrap: false,
-  gap: 8,
-  sort: { by: "name", order: "asc", numeric: false, locale: "sv-SE", case_insensitive: true },
-  cards: [
-    { type: "button", entity: "light.kok" },
-    { type: "button", entity: "light.vardagsrum" },
-  ],
-});
-
-SortedStackCard.getConfigElement = () => document.createElement("sorted-stack-card-editor");
-
 class SortedStackCardEditor extends HTMLElement {
   setConfig(config) {
     this._config = JSON.parse(JSON.stringify(config || {}));
@@ -575,3 +560,20 @@ class SortedStackCardEditor extends HTMLElement {
 }
 
 customElements.define("sorted-stack-card-editor", SortedStackCardEditor);
+
+const _ssc = customElements.get("sorted-stack-card");
+if (_ssc) {
+  _ssc.getStubConfig = () => ({
+    type: "custom:sorted-stack-card",
+    direction: "vertical",
+    wrap: false,
+    gap: 8,
+    sort: { by: "name", order: "asc", numeric: false, locale: "sv-SE", case_insensitive: true },
+    cards: [
+      { type: "button", entity: "light.kok" },
+      { type: "button", entity: "light.vardagsrum" },
+    ],
+  });
+
+  _ssc.getConfigElement = () => document.createElement("sorted-stack-card-editor");
+}
