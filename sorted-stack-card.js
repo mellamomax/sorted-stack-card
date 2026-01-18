@@ -1,12 +1,13 @@
 /* sorted-stack-card.js
  * Custom Lovelace card: custom:sorted-stack-card
  *
- * Minimal UI editor:
+ * UI editor:
  * - direction: vertical|horizontal
  * - sort.by: entity_id|name|state|last_changed|last_updated
  * - sort.order: asc|desc
+ * - cards[]: Visual editor per sub-card (hui-card-element-editor) + preview
  *
- * Card features (render):
+ * Render:
  * - direction: vertical|horizontal
  * - wrap: true|false (only for horizontal)
  * - gap: number (px)
@@ -22,23 +23,6 @@
 const CARD_TAG = "sorted-stack-card";
 
 class SortedStackCard extends HTMLElement {
-  // --- Lovelace UI editor support (same pattern as RotatingHelperCard) ---
-  static getConfigElement() {
-    return document.createElement("sorted-stack-card-editor");
-  }
-
-  static getStubConfig() {
-    return {
-      type: "custom:sorted-stack-card",
-      direction: "vertical",
-      sort: { by: "name", order: "asc" },
-      cards: [
-        { type: "button", entity: "light.kok" },
-        { type: "button", entity: "light.vardagsrum" },
-      ],
-    };
-  }
-
   setConfig(config) {
     if (!config || (config.cards == null && config.groups == null)) {
       throw new Error("sorted-stack-card: You must provide 'cards' or 'groups'.");
@@ -60,8 +44,8 @@ class SortedStackCard extends HTMLElement {
       config
     );
 
-    // Ensure cards exists if using flat mode
-    this._config.cards = this._config.cards ?? null;
+    // If flat mode is used, always keep cards as an array (never null)
+    if ("cards" in this._config) this._config.cards = this._config.cards ?? [];
 
     // Normalize sort object
     this._config.sort = Object.assign(
@@ -237,10 +221,7 @@ class SortedStackCard extends HTMLElement {
     const helpers = await this._ensureHelpers();
     if (!helpers) {
       const err = document.createElement("hui-error-card");
-      err.setConfig({
-        type: "error",
-        error: "sorted-stack-card: Card helpers not available.",
-      });
+      err.setConfig({ type: "error", error: "sorted-stack-card: Card helpers not available." });
       return err;
     }
     return helpers.createCardElement(cardCfg);
@@ -321,17 +302,14 @@ class SortedStackCard extends HTMLElement {
     this._setLayoutClasses();
 
     try {
-      if (this._config.cards) {
+      if (Array.isArray(this._config.cards)) {
         await this._renderFlatCards();
       } else if (this._config.groups) {
         await this._renderGroups();
       }
     } catch (e) {
       const err = document.createElement("hui-error-card");
-      err.setConfig({
-        type: "error",
-        error: `sorted-stack-card: ${e?.message || e}`,
-      });
+      err.setConfig({ type: "error", error: `sorted-stack-card: ${e?.message || e}` });
       this._root.replaceChildren(err);
     }
   }
@@ -339,7 +317,7 @@ class SortedStackCard extends HTMLElement {
 
 customElements.define(CARD_TAG, SortedStackCard);
 
-/* -------------------- UI Editor (minimal) -------------------- */
+/* -------------------- UI Editor -------------------- */
 
 class SortedStackCardEditor extends HTMLElement {
   constructor() {
@@ -363,6 +341,8 @@ class SortedStackCardEditor extends HTMLElement {
 
   setConfig(config) {
     this._config = JSON.parse(JSON.stringify(config || {}));
+
+    // HARD GUARD: wrapper-config must always exist
     this._config.type = "custom:sorted-stack-card";
     this._config.direction = this._config.direction ?? "vertical";
     this._config.sort = this._config.sort ?? {};
@@ -379,10 +359,17 @@ class SortedStackCardEditor extends HTMLElement {
   }
 
   _fire() {
-    // Viktigt: HA lyssnar på config-changed med detail.config
+    // HARD GUARD (again)
+    this._config = this._config || {};
+    this._config.type = "custom:sorted-stack-card";
+    this._config.cards = this._config.cards ?? [];
+    this._config.sort = this._config.sort ?? {};
+    this._config.direction = this._config.direction ?? "vertical";
+
     this.dispatchEvent(
       new CustomEvent("config-changed", {
-        detail: { config: this._config },
+        // HA variants: some read detail.config, others detail.value
+        detail: { config: this._config, value: this._config },
         bubbles: true,
         composed: true,
       })
@@ -404,6 +391,7 @@ class SortedStackCardEditor extends HTMLElement {
 
   _select(i) {
     this._selected = i;
+    this._renderTabsOnly();
     this._renderSubEditor();
     this._renderPreview();
   }
@@ -444,21 +432,26 @@ class SortedStackCardEditor extends HTMLElement {
 
     const cfg = cards[this._selected];
 
-    // Standard HA visual editor för “ett kort”
+    // HA visual editor for ONE card config
     const el = document.createElement("hui-card-element-editor");
     el.hass = this._hass;
-    // olika HA-versioner använder value/config – sätt båda
+
+    // safest across versions:
     el.value = cfg;
-    el.config = cfg;
     el.setConfig?.(cfg);
 
     el.addEventListener("config-changed", (e) => {
-      const newCfg = e.detail?.config ?? e.detail?.value;
+      const newCfg = e.detail?.value ?? e.detail?.config; // IMPORTANT: value first
       if (!newCfg) return;
+
+      // Write ONLY into wrapper.cards[index]
       this._config.cards[this._selected] = newCfg;
-      this._renderTabsOnly();
-      this._renderPreview();
+
+      // Fire wrapper-config (NEVER newCfg!)
       this._fire();
+
+      // keep UI in sync
+      this._renderPreview();
     });
 
     this._subEditor = el;
@@ -466,7 +459,6 @@ class SortedStackCardEditor extends HTMLElement {
   }
 
   _renderTabsOnly() {
-    // uppdatera bara tabs-raden så du slipper “blink” i editorn
     const tabsHost = this.shadowRoot?.querySelector("#tabs");
     if (!tabsHost) return;
 
@@ -513,7 +505,6 @@ class SortedStackCardEditor extends HTMLElement {
   _render() {
     if (!this.shadowRoot || !this._config) return;
 
-    const cards = this._config.cards ?? [];
     const sortBy = this._config.sort?.by ?? "name";
 
     this.shadowRoot.innerHTML = `
@@ -558,18 +549,20 @@ class SortedStackCardEditor extends HTMLElement {
       </div>
 
       <div class="tabs" id="tabs"></div>
-
       <div class="subwrap" id="subeditor"></div>
-
       <div class="preview" id="preview"></div>
     `;
 
-    // binds för huvudfält
-    this.shadowRoot.querySelector("#direction")?.addEventListener("change", (e) => this._set("direction", e.target.value));
-    this.shadowRoot.querySelector("#by")?.addEventListener("change", (e) => this._set("sort.by", e.target.value));
-    this.shadowRoot.querySelector("#order")?.addEventListener("change", (e) => this._set("sort.order", e.target.value));
+    this.shadowRoot
+      .querySelector("#direction")
+      ?.addEventListener("change", (e) => this._set("direction", e.target.value));
+    this.shadowRoot
+      .querySelector("#by")
+      ?.addEventListener("change", (e) => this._set("sort.by", e.target.value));
+    this.shadowRoot
+      .querySelector("#order")
+      ?.addEventListener("change", (e) => this._set("sort.order", e.target.value));
 
-    // tabs + subeditor + preview
     this._renderTabsOnly();
     this._renderSubEditor();
     this._renderPreview();
@@ -578,7 +571,21 @@ class SortedStackCardEditor extends HTMLElement {
 
 customElements.define("sorted-stack-card-editor", SortedStackCardEditor);
 
-
+/* -------------------- Bind editor/stub to element (IMPORTANT) -------------------- */
+/* This is the stable pattern that prevents HA from treating your wrapper as a sub-card */
+const _ssc = customElements.get("sorted-stack-card");
+if (_ssc) {
+  _ssc.getConfigElement = () => document.createElement("sorted-stack-card-editor");
+  _ssc.getStubConfig = () => ({
+    type: "custom:sorted-stack-card",
+    direction: "vertical",
+    sort: { by: "name", order: "asc" },
+    cards: [
+      { type: "button", entity: "light.kok" },
+      { type: "button", entity: "light.vardagsrum" },
+    ],
+  });
+}
 
 /* -------------------- Card picker entry -------------------- */
 
