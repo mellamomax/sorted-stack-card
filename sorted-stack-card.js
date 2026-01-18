@@ -342,19 +342,18 @@ customElements.define(CARD_TAG, SortedStackCard);
 /* -------------------- UI Editor (minimal) -------------------- */
 
 class SortedStackCardEditor extends HTMLElement {
-  setConfig(config) {
-    this._config = { ...(config || {}) };
-    this._config.type = "custom:sorted-stack-card";
-    this._config.direction = this._config.direction ?? "vertical";
-    this._config.sort = this._config.sort ?? {};
-    this._config.sort.by = this._config.sort.by ?? "name";
-    this._config.sort.order = this._config.sort.order ?? "asc";
-    this._config.cards = this._config.cards ?? [];
-    this._render();
+  constructor() {
+    super();
+    this._selected = 0;
+    this._subEditor = null;
+    this._previewEl = null;
+    this._helpersPromise = null;
   }
 
   set hass(hass) {
     this._hass = hass;
+    if (this._subEditor) this._subEditor.hass = hass;
+    if (this._previewEl) this._previewEl.hass = hass;
   }
 
   connectedCallback() {
@@ -362,10 +361,28 @@ class SortedStackCardEditor extends HTMLElement {
     this._render();
   }
 
+  setConfig(config) {
+    this._config = JSON.parse(JSON.stringify(config || {}));
+    this._config.type = "custom:sorted-stack-card";
+    this._config.direction = this._config.direction ?? "vertical";
+    this._config.sort = this._config.sort ?? {};
+    this._config.sort.by = this._config.sort.by ?? "name";
+    this._config.sort.order = this._config.sort.order ?? "asc";
+    this._config.cards = this._config.cards ?? [];
+
+    this._selected = Math.max(
+      0,
+      Math.min(this._selected || 0, Math.max(0, this._config.cards.length - 1))
+    );
+
+    this._render();
+  }
+
   _fire() {
+    // Viktigt: HA lyssnar på config-changed med detail.config
     this.dispatchEvent(
       new CustomEvent("config-changed", {
-        detail: { value: this._config },
+        detail: { config: this._config },
         bubbles: true,
         composed: true,
       })
@@ -385,15 +402,132 @@ class SortedStackCardEditor extends HTMLElement {
     this._fire();
   }
 
+  _select(i) {
+    this._selected = i;
+    this._renderSubEditor();
+    this._renderPreview();
+  }
+
+  _addCard() {
+    this._config.cards = this._config.cards ?? [];
+    this._config.cards.push({ type: "button" });
+    this._selected = this._config.cards.length - 1;
+    this._render();
+    this._fire();
+  }
+
+  _removeCard() {
+    if (!this._config.cards?.length) return;
+    this._config.cards.splice(this._selected, 1);
+    this._selected = Math.max(0, Math.min(this._selected, this._config.cards.length - 1));
+    this._render();
+    this._fire();
+  }
+
+  _ensureHelpers() {
+    if (this._helpersPromise) return this._helpersPromise;
+    this._helpersPromise = window.loadCardHelpers ? window.loadCardHelpers() : Promise.resolve(null);
+    return this._helpersPromise;
+  }
+
+  async _renderSubEditor() {
+    const host = this.shadowRoot?.querySelector("#subeditor");
+    if (!host) return;
+    host.innerHTML = "";
+
+    const cards = this._config.cards ?? [];
+    if (!cards.length) {
+      host.innerHTML = `<div class="hint">Lägg till ett kort med +</div>`;
+      this._subEditor = null;
+      return;
+    }
+
+    const cfg = cards[this._selected];
+
+    // Standard HA visual editor för “ett kort”
+    const el = document.createElement("hui-card-element-editor");
+    el.hass = this._hass;
+    // olika HA-versioner använder value/config – sätt båda
+    el.value = cfg;
+    el.config = cfg;
+    el.setConfig?.(cfg);
+
+    el.addEventListener("config-changed", (e) => {
+      const newCfg = e.detail?.config ?? e.detail?.value;
+      if (!newCfg) return;
+      this._config.cards[this._selected] = newCfg;
+      this._renderTabsOnly();
+      this._renderPreview();
+      this._fire();
+    });
+
+    this._subEditor = el;
+    host.appendChild(el);
+  }
+
+  _renderTabsOnly() {
+    // uppdatera bara tabs-raden så du slipper “blink” i editorn
+    const tabsHost = this.shadowRoot?.querySelector("#tabs");
+    if (!tabsHost) return;
+
+    const cards = this._config.cards ?? [];
+    tabsHost.innerHTML = `
+      ${cards
+        .map(
+          (_, i) => `<button class="tab ${i === this._selected ? "active" : ""}" data-i="${i}">${i + 1}</button>`
+        )
+        .join("")}
+      <button class="iconbtn" id="add">+</button>
+      <button class="iconbtn" id="remove" ${cards.length ? "" : "disabled"}>🗑</button>
+    `;
+
+    tabsHost.querySelectorAll(".tab").forEach((btn) => {
+      btn.addEventListener("click", () => this._select(Number(btn.dataset.i)));
+    });
+    tabsHost.querySelector("#add")?.addEventListener("click", () => this._addCard());
+    tabsHost.querySelector("#remove")?.addEventListener("click", () => this._removeCard());
+  }
+
+  async _renderPreview() {
+    const host = this.shadowRoot?.querySelector("#preview");
+    if (!host) return;
+    host.innerHTML = "";
+
+    const cards = this._config.cards ?? [];
+    if (!cards.length) {
+      this._previewEl = null;
+      return;
+    }
+
+    const helpers = await this._ensureHelpers();
+    if (!helpers) return;
+
+    const cfg = cards[this._selected];
+    const el = helpers.createCardElement(cfg);
+    el.hass = this._hass;
+
+    this._previewEl = el;
+    host.appendChild(el);
+  }
+
   _render() {
     if (!this.shadowRoot || !this._config) return;
+
+    const cards = this._config.cards ?? [];
+    const sortBy = this._config.sort?.by ?? "name";
 
     this.shadowRoot.innerHTML = `
       <style>
         .row{display:flex; gap:12px; align-items:center; margin:10px 0;}
         label{font-size:13px; opacity:.85; min-width:90px;}
         select{flex:1; padding:8px; border-radius:10px; border:1px solid var(--divider-color);}
-        .hint{opacity:.7; margin-top:10px;}
+        .tabs{display:flex; gap:6px; align-items:center; margin:12px 0;}
+        .tab{padding:6px 10px; border-radius:10px; border:1px solid var(--divider-color); background:var(--card-background-color); cursor:pointer;}
+        .tab.active{border-color:var(--primary-color); box-shadow:0 0 0 1px var(--primary-color) inset;}
+        .iconbtn{padding:6px 10px; border-radius:10px; border:1px solid var(--divider-color); background:var(--card-background-color); cursor:pointer;}
+        .hint{opacity:.7; padding:10px 0;}
+        .subwrap{margin-top:8px;}
+        .preview{margin-top:14px;}
       </style>
 
       <div class="row">
@@ -407,11 +541,11 @@ class SortedStackCardEditor extends HTMLElement {
       <div class="row">
         <label>Sortera</label>
         <select id="by">
-          <option value="entity_id" ${this._config.sort.by === "entity_id" ? "selected" : ""}>entity_id</option>
-          <option value="name" ${this._config.sort.by === "name" ? "selected" : ""}>name</option>
-          <option value="state" ${this._config.sort.by === "state" ? "selected" : ""}>state</option>
-          <option value="last_changed" ${this._config.sort.by === "last_changed" ? "selected" : ""}>last_changed</option>
-          <option value="last_updated" ${this._config.sort.by === "last_updated" ? "selected" : ""}>last_updated</option>
+          <option value="entity_id" ${sortBy === "entity_id" ? "selected" : ""}>entity_id</option>
+          <option value="name" ${sortBy === "name" ? "selected" : ""}>name</option>
+          <option value="state" ${sortBy === "state" ? "selected" : ""}>state</option>
+          <option value="last_changed" ${sortBy === "last_changed" ? "selected" : ""}>last_changed</option>
+          <option value="last_updated" ${sortBy === "last_updated" ? "selected" : ""}>last_updated</option>
         </select>
       </div>
 
@@ -423,18 +557,28 @@ class SortedStackCardEditor extends HTMLElement {
         </select>
       </div>
 
-      <div class="hint">
-        Underkort redigeras i YAML för nu (cards: ...). Vi kan lägga till tabbar + visual editor sen.
-      </div>
+      <div class="tabs" id="tabs"></div>
+
+      <div class="subwrap" id="subeditor"></div>
+
+      <div class="preview" id="preview"></div>
     `;
 
+    // binds för huvudfält
     this.shadowRoot.querySelector("#direction")?.addEventListener("change", (e) => this._set("direction", e.target.value));
     this.shadowRoot.querySelector("#by")?.addEventListener("change", (e) => this._set("sort.by", e.target.value));
     this.shadowRoot.querySelector("#order")?.addEventListener("change", (e) => this._set("sort.order", e.target.value));
+
+    // tabs + subeditor + preview
+    this._renderTabsOnly();
+    this._renderSubEditor();
+    this._renderPreview();
   }
 }
 
 customElements.define("sorted-stack-card-editor", SortedStackCardEditor);
+
+
 
 /* -------------------- Card picker entry -------------------- */
 
