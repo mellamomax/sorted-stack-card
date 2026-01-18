@@ -1,6 +1,6 @@
 {
     "name": "Sorted Stack Card",
     "render_readme": true,
-    "filename": "sorter-stack-card.js",
+    "filename": "sorted-stack-card.js",
     "content_in_root": true
   }
