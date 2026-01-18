@@ -440,19 +440,23 @@ class SortedStackCardEditor extends HTMLElement {
     el.value = cfg;
     el.setConfig?.(cfg);
 
-    el.addEventListener("config-changed", (e) => {
-      const newCfg = e.detail?.value ?? e.detail?.config; // IMPORTANT: value first
-      if (!newCfg) return;
+	el.addEventListener(
+	  "config-changed",
+	  (e) => {
+		// STOPPA sub-editorns event så HA inte ersätter wrappern med subkortets config
+		e.preventDefault?.();
+		e.stopPropagation();
+		e.stopImmediatePropagation?.();
 
-      // Write ONLY into wrapper.cards[index]
-      this._config.cards[this._selected] = newCfg;
+		const newCfg = e.detail?.value ?? e.detail?.config;
+		if (!newCfg) return;
 
-      // Fire wrapper-config (NEVER newCfg!)
-      this._fire();
-
-      // keep UI in sync
-      this._renderPreview();
-    });
+		this._config.cards[this._selected] = newCfg;
+		this._fire();
+		this._renderPreview();
+	  },
+	  { capture: true } // fånga tidigt innan HA
+	);
 
     this._subEditor = el;
     host.appendChild(el);
