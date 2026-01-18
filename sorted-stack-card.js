@@ -338,3 +338,240 @@ window.customCards.push({
   name: "Sorted Stack Card",
   description: "Stack (vertical/horizontal) that can sort cards by entity/name/state/last_changed/etc.",
 });
+
+
+
+// ---- Lovelace UI editor support ----
+SortedStackCard.getStubConfig = () => ({
+  type: "custom:sorted-stack-card",
+  direction: "vertical",
+  wrap: false,
+  gap: 8,
+  sort: { by: "name", order: "asc", numeric: false, locale: "sv-SE", case_insensitive: true },
+  cards: [
+    { type: "button", entity: "light.kok" },
+    { type: "button", entity: "light.vardagsrum" },
+  ],
+});
+
+SortedStackCard.getConfigElement = () => document.createElement("sorted-stack-card-editor");
+
+class SortedStackCardEditor extends HTMLElement {
+  setConfig(config) {
+    this._config = JSON.parse(JSON.stringify(config || {}));
+    if (!this._config.cards && !this._config.groups) this._config.cards = [];
+    this._selected = Math.min(this._selected || 0, (this._config.cards?.length || 1) - 1);
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._subEditor) this._subEditor.hass = hass;
+  }
+
+  connectedCallback() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    this._render();
+  }
+
+  _fire() {
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { config: this._config },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  _set(path, value) {
+    const parts = path.split(".");
+    let o = this._config;
+    while (parts.length > 1) {
+      const p = parts.shift();
+      o[p] = o[p] ?? {};
+      o = o[p];
+    }
+    o[parts[0]] = value;
+    this._render();
+    this._fire();
+  }
+
+  _ensureSortDefaults() {
+    this._config.sort = this._config.sort ?? {};
+    if (!("by" in this._config.sort)) this._config.sort.by = "entity_id";
+    if (!("order" in this._config.sort)) this._config.sort.order = "asc";
+    if (!("numeric" in this._config.sort)) this._config.sort.numeric = false;
+    if (!("locale" in this._config.sort)) this._config.sort.locale = "sv-SE";
+    if (!("case_insensitive" in this._config.sort)) this._config.sort.case_insensitive = true;
+  }
+
+  _select(i) {
+    this._selected = i;
+    this._renderSubEditor();
+  }
+
+  _addCard() {
+    this._config.cards = this._config.cards ?? [];
+    this._config.cards.push({ type: "button" });
+    this._selected = this._config.cards.length - 1;
+    this._render();
+    this._fire();
+  }
+
+  _removeCard() {
+    if (!this._config.cards?.length) return;
+    this._config.cards.splice(this._selected, 1);
+    this._selected = Math.max(0, Math.min(this._selected, this._config.cards.length - 1));
+    this._render();
+    this._fire();
+  }
+
+  async _renderSubEditor() {
+    const host = this.shadowRoot?.querySelector("#subeditor");
+    if (!host) return;
+
+    host.innerHTML = "";
+
+    const cards = this._config.cards ?? [];
+    if (!cards.length) {
+      host.innerHTML = `<div class="hint">Lägg till ett kort med +</div>`;
+      return;
+    }
+
+    const cfg = cards[this._selected];
+
+    // HA's built-in card editor (visual)
+    const el = document.createElement("hui-card-element-editor");
+    el.hass = this._hass;
+    el.value = cfg;
+
+    el.addEventListener("config-changed", (e) => {
+      const newCfg = e.detail?.config;
+      if (!newCfg) return;
+      this._config.cards[this._selected] = newCfg;
+      this._fire();
+    });
+
+    this._subEditor = el;
+    host.appendChild(el);
+  }
+
+  _render() {
+    if (!this.shadowRoot) return;
+    if (!this._config) return;
+
+    this._ensureSortDefaults();
+
+    const cards = this._config.cards ?? [];
+    const sel = Math.max(0, Math.min(this._selected || 0, Math.max(0, cards.length - 1)));
+    this._selected = sel;
+
+    const tabs = cards
+      .map(
+        (_, i) => `
+        <button class="tab ${i === sel ? "active" : ""}" data-i="${i}">${i + 1}</button>
+      `
+      )
+      .join("");
+
+    const sortBy = this._config.sort.by;
+
+    this.shadowRoot.innerHTML = `
+      <style>
+        .row{display:flex; gap:12px; align-items:center; margin:10px 0;}
+        label{font-size:13px; opacity:.85; min-width:90px;}
+        select,input{flex:1; padding:8px; border-radius:10px; border:1px solid var(--divider-color);}
+        .tabs{display:flex; gap:6px; align-items:center; margin:8px 0;}
+        .tab{padding:6px 10px; border-radius:10px; border:1px solid var(--divider-color); background:var(--card-background-color); cursor:pointer;}
+        .tab.active{border-color:var(--primary-color); box-shadow:0 0 0 1px var(--primary-color) inset;}
+        .iconbtn{padding:6px 10px; border-radius:10px; border:1px solid var(--divider-color); background:var(--card-background-color); cursor:pointer;}
+        .hint{opacity:.7; padding:10px 0;}
+        .subwrap{margin-top:10px;}
+      </style>
+
+      <div class="row">
+        <label>Layout</label>
+        <select id="direction">
+          <option value="vertical" ${this._config.direction === "vertical" ? "selected" : ""}>Vertical</option>
+          <option value="horizontal" ${this._config.direction === "horizontal" ? "selected" : ""}>Horizontal</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label>Wrap</label>
+        <select id="wrap">
+          <option value="false" ${!this._config.wrap ? "selected" : ""}>False</option>
+          <option value="true" ${this._config.wrap ? "selected" : ""}>True</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label>Gap (px)</label>
+        <input id="gap" type="number" min="0" value="${Number(this._config.gap ?? 8)}">
+      </div>
+
+      <div class="row">
+        <label>Sortera</label>
+        <select id="sortby">
+          <option value="entity_id" ${sortBy === "entity_id" ? "selected" : ""}>entity_id</option>
+          <option value="name" ${sortBy === "name" ? "selected" : ""}>name</option>
+          <option value="state" ${sortBy === "state" ? "selected" : ""}>state</option>
+          <option value="last_changed" ${sortBy === "last_changed" ? "selected" : ""}>last_changed</option>
+          <option value="last_updated" ${sortBy === "last_updated" ? "selected" : ""}>last_updated</option>
+          <option value="attribute" ${sortBy === "attribute" ? "selected" : ""}>attribute</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label>Ordning</label>
+        <select id="order">
+          <option value="asc" ${this._config.sort.order === "asc" ? "selected" : ""}>A→Ö</option>
+          <option value="desc" ${this._config.sort.order === "desc" ? "selected" : ""}>Ö→A</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label>Numeric</label>
+        <select id="numeric">
+          <option value="false" ${!this._config.sort.numeric ? "selected" : ""}>False</option>
+          <option value="true" ${this._config.sort.numeric ? "selected" : ""}>True</option>
+        </select>
+      </div>
+
+      ${sortBy === "attribute" ? `
+      <div class="row">
+        <label>Attribute</label>
+        <input id="attr" placeholder="attributes.battery_level" value="${this._config.sort.attribute ?? ""}">
+      </div>` : ""}
+
+      <div class="tabs">
+        ${tabs}
+        <button class="iconbtn" id="add">+</button>
+        <button class="iconbtn" id="remove" ${cards.length ? "" : "disabled"}>🗑</button>
+      </div>
+
+      <div class="subwrap" id="subeditor"></div>
+    `;
+
+    // Bind
+    this.shadowRoot.querySelector("#direction")?.addEventListener("change", (e) => this._set("direction", e.target.value));
+    this.shadowRoot.querySelector("#wrap")?.addEventListener("change", (e) => this._set("wrap", e.target.value === "true"));
+    this.shadowRoot.querySelector("#gap")?.addEventListener("change", (e) => this._set("gap", Number(e.target.value)));
+    this.shadowRoot.querySelector("#sortby")?.addEventListener("change", (e) => this._set("sort.by", e.target.value));
+    this.shadowRoot.querySelector("#order")?.addEventListener("change", (e) => this._set("sort.order", e.target.value));
+    this.shadowRoot.querySelector("#numeric")?.addEventListener("change", (e) => this._set("sort.numeric", e.target.value === "true"));
+    this.shadowRoot.querySelector("#attr")?.addEventListener("change", (e) => this._set("sort.attribute", e.target.value));
+
+    this.shadowRoot.querySelectorAll(".tab").forEach((btn) => {
+      btn.addEventListener("click", () => this._select(Number(btn.dataset.i)));
+    });
+    this.shadowRoot.querySelector("#add")?.addEventListener("click", () => this._addCard());
+    this.shadowRoot.querySelector("#remove")?.addEventListener("click", () => this._removeCard());
+
+    // Sub editor (visual)
+    this._renderSubEditor();
+  }
+}
+
+customElements.define("sorted-stack-card-editor", SortedStackCardEditor);
